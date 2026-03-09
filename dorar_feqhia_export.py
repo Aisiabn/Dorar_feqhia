@@ -120,6 +120,26 @@ def safe_name(s: str, maxlen: int = 80) -> str:
     return s[:maxlen]
 
 
+# عداد ترقيم المجلدات لكل مستوى: {(parent_key): counter}
+_folder_counters: dict[tuple, int] = {}
+_folder_names:    dict[tuple, str] = {}   # key → اسم المجلد المرقم
+
+def numbered_folder(ancestors: list[str], depth: int) -> str:
+    """
+    أعطِ كل عقدة اسماً مرقماً بناءً على موقعها بين أخواتها.
+    مثال: "01_كتابُ_الطَّهارةِ / 03_الباب_الثالث"
+    """
+    key        = tuple(ancestors[:depth + 1])
+    if key in _folder_names:
+        return _folder_names[key]
+    parent_key = tuple(ancestors[:depth])
+    _folder_counters[parent_key] = _folder_counters.get(parent_key, 0) + 1
+    n    = _folder_counters[parent_key]
+    name = f"{n:02d}_{safe_name(ancestors[depth])}"
+    _folder_names[key] = name
+    return name
+
+
 # ── Discovery ─────────────────────────────────────────────────────────────────
 def discover_urls() -> list[str]:
     """
@@ -346,55 +366,64 @@ def html_to_md(html: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", md).strip()
 
 
+def _ancestors_to_path(ancestors: list[str]) -> Path:
+    """حوّل قائمة الأجداد إلى مسار مرقم."""
+    parts = [numbered_folder(ancestors, d) for d in range(len(ancestors))]
+    return MD_DIR.joinpath(*parts)
+
+
 def export_markdown(items: list[Item]) -> None:
     MD_DIR.mkdir(parents=True, exist_ok=True)
-    section_dirs: dict[tuple, Path] = {}
-
+    # تمرير أول لتسجيل ترتيب الأجداد (ضروري لضمان ترقيم متسق)
     for item in items:
-        if not isinstance(item, Page):
-            continue
-        ancestors = item.breadcrumb[SKIP_CRUMBS:]
-        for d in range(len(ancestors) - 1):
-            key = tuple(ancestors[:d + 1])
-            if key not in section_dirs:
-                parts = [safe_name(s) for s in ancestors[:d + 1]]
-                section_dirs[key] = MD_DIR.joinpath(*parts)
-
-        parts  = [safe_name(s) for s in ancestors[:-1]]
-        folder = MD_DIR.joinpath(*parts) if parts else MD_DIR
-        folder.mkdir(parents=True, exist_ok=True)
-
-        fname    = f"{item.pid}_{safe_name(item.title)}.md"
-        hashes   = "#" * item.level
-        md       = html_to_md(item.body_html)
-        fn_block = ""
-        if item.footnotes:
-            lines    = [f"[^{fid.split('-')[-1]}]: {txt}" for fid, txt in item.footnotes]
-            fn_block = "\n\n---\n\n" + "\n".join(lines)
-        content = (
-            f"{hashes} {item.title}\n\n"
-            f"> المصدر: {item.url}\n\n"
-            f"{md}{fn_block}\n"
+        ancestors = (
+            item.breadcrumb[SKIP_CRUMBS:]
+            if isinstance(item, Page)
+            else [item.title]   # IndexPage يُسجَّل عند مروره
         )
-        (folder / fname).write_text(content, encoding="utf-8")
+        if isinstance(item, Page):
+            for d in range(len(ancestors) - 1):
+                numbered_folder(ancestors, d)
 
+    # تمرير ثانٍ للكتابة
     for item in items:
-        if not isinstance(item, IndexPage):
-            continue
-        matched = None
-        for key, dpath in section_dirs.items():
-            if len(key) == item.level and key[-1] == item.title:
-                matched = dpath
-                break
-        if matched is None:
-            matched = MD_DIR / safe_name(item.title)
-        matched.mkdir(parents=True, exist_ok=True)
-        hashes     = "#" * item.level
-        child_type = CHILDREN_NAMES.get(item.level, "قسم")
-        phrase     = _count_phrase(len(item.children), child_type)
-        bullets    = "\n".join(f"{i}. {c}" for i, c in enumerate(item.children, 1))
-        content    = f"{hashes} {item.title}\n\n{phrase}:\n\n{bullets}\n"
-        (matched / "_index.md").write_text(content, encoding="utf-8")
+        if isinstance(item, Page):
+            ancestors = item.breadcrumb[SKIP_CRUMBS:]
+            folder    = _ancestors_to_path(ancestors[:-1]) if len(ancestors) > 1 else MD_DIR
+            folder.mkdir(parents=True, exist_ok=True)
+
+            n_file   = f"{item.pid}_{safe_name(item.title)}.md"
+            hashes   = "#" * item.level
+            md       = html_to_md(item.body_html)
+            fn_block = ""
+            if item.footnotes:
+                lines    = [f"[^{fid.split('-')[-1]}]: {txt}" for fid, txt in item.footnotes]
+                fn_block = "\n\n---\n\n" + "\n".join(lines)
+            content = (
+                f"{hashes} {item.title}\n\n"
+                f"> المصدر: {item.url}\n\n"
+                f"{md}{fn_block}\n"
+            )
+            (folder / n_file).write_text(content, encoding="utf-8")
+
+        elif isinstance(item, IndexPage):
+            # ابحث عن المسار المسجل لهذا العنوان
+            key = next(
+                (k for k, v in _folder_names.items() if k[-1] == item.title and len(k) == item.level),
+                None,
+            )
+            if key:
+                folder = MD_DIR.joinpath(*[_folder_names[tuple(key[:d+1])] for d in range(len(key))])
+            else:
+                folder = MD_DIR / f"{item.pid}_{safe_name(item.title)}"
+            folder.mkdir(parents=True, exist_ok=True)
+
+            hashes     = "#" * item.level
+            child_type = CHILDREN_NAMES.get(item.level, "قسم")
+            phrase     = _count_phrase(len(item.children), child_type)
+            bullets    = "\n".join(f"{i}. {c}" for i, c in enumerate(item.children, 1))
+            content    = f"{hashes} {item.title}\n\n{phrase}:\n\n{bullets}\n"
+            (folder / "_index.md").write_text(content, encoding="utf-8")
 
     print(f"  → Markdown → {MD_DIR}")
 
