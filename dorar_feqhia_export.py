@@ -410,7 +410,7 @@ body {
     margin: 1em 2em;
     color: #333;
 }
-h1,h2,h3,h4,h5,h6 { color: #2c3e50; margin: 1em 0 0.4em; font-weight: bold; }
+h1,h2,h3,h4,h5,h6 { font-size: 1em; color: #2c3e50; margin: 1em 0 0.4em; font-weight: bold; }
 p { margin: 0.4em 0 0.9em; text-align: justify; }
 .footnotes { border-top: 1px solid #ccc; margin-top: 2em; padding-top: 0.8em; }
 sup a { color: #888; font-size: 0.8em; text-decoration: none; }
@@ -576,7 +576,9 @@ def export_epub(items: list[Item]) -> None:
                 f'<item id="{iid}" href="pages/{fn}" media-type="application/xhtml+xml"/>'
             )
             spine_refs.append(f'<itemref idref="{iid}"/>')
-            toc_entries.append((item.level, item.title, item.pid))
+            # TOC: IndexPages فقط (كتاب/باب/فصل/مبحث) — بدون صفحات المحتوى الفردية
+            if isinstance(item, IndexPage):
+                toc_entries.append((item.level, item.title, item.pid))
 
         manifest = "\n    ".join(man_items)
         spine    = "\n    ".join(spine_refs)
