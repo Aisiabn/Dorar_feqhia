@@ -1,0 +1,57 @@
+name: Export Feqhia Encyclopedia
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "الوضع"
+        required: true
+        default: "inspect"
+        type: choice
+        options:
+          - inspect
+          - export
+      test_pages:
+        description: "عدد صفحات للتصدير (0 = كامل) — يُستخدم فقط في وضع export"
+        required: false
+        default: "0"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Inspect HTML structure
+        if: ${{ github.event.inputs.mode == 'inspect' }}
+        run: python inspect_feqhia.py
+
+      - name: Run exporter
+        if: ${{ github.event.inputs.mode == 'export' }}
+        env:
+          TEST_PAGES: ${{ github.event.inputs.test_pages }}
+        run: python dorar_feqhia_export.py
+
+      - name: Commit and push output
+        if: ${{ github.event.inputs.mode == 'export' }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "chore: export feqhia [$(date -u +'%Y-%m-%d %H:%M UTC')]"
+          git push origin HEAD
